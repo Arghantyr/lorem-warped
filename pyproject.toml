@@ -10,8 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["torch>=2.0", "numpy>=1.24", "Pillow>=9.0"]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "reportlab>=4", "PyMuPDF>=1.24", "tomli>=2; python_version < '3.11'"]
+
 [project.scripts]
-lorem-warp = "lorem_warped.cli:main"
+lorem-warped = "lorem_warped.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
