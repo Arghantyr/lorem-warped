@@ -38,7 +38,7 @@ Image.fromarray(pixels).save("horizontal_wave.png")
 
 ## Transformations and their extent
 
-The animations are cropped from `lorem-warped-motion-v7.mp4` to show only its white image panel. They illustrate the visual behavior, not the exact parameters of the commands above. Geometric `--intensity` is a nonnegative pixel-displacement scale, not a brightness setting or a fixed maximum; high values can make text unreadable.
+The animations illustrate the visual behavior, not the exact parameters of the commands above. Geometric `--intensity` is a nonnegative pixel-displacement scale, not a brightness setting or a fixed maximum; high values can make text unreadable.
 
 | Local and lens effects | Page-wide effects |
 | --- | --- |
