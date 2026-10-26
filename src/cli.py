@@ -4,23 +4,46 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from functools import partial
 from pathlib import Path
 
+from .dataset_generator import DEFAULT_LOCALES, generate_dataset
 from .core import (
     CentreDistribution, DistortionConfig, PAGE_WARPS, _load_image, _save_image,
     image_to_tensor, render_lorem_page, sine_lens, refraction_distortion_matrices,
     refract_image, page_warp_field, warp_image, overlay_warped_grid,
     make_nonoverlapping_centres, distort_image,
 )
+from .tensor import load_mask
 
 
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "dataset-generator":
+        dataset_parser = argparse.ArgumentParser(prog="lorem-warped dataset-generator")
+        dataset_parser.add_argument("--locales", nargs="+", default=list(DEFAULT_LOCALES))
+        dataset_parser.add_argument("--words-per-locale", type=int, default=100)
+        dataset_parser.add_argument("--words-per-paragraph", type=int, default=100)
+        dataset_parser.add_argument("--total-characters-per-paragraph", type=int)
+        dataset_parser.add_argument("--font-size", type=float, default=12)
+        dataset_parser.add_argument("--dpi", type=int, default=300)
+        dataset_parser.add_argument("--seed", type=int, help="Reproduce the same Faker words across runs.")
+        dataset_parser.add_argument("--output-root", type=Path, default=Path("."))
+        options = dataset_parser.parse_args(argv[1:])
+        try:
+            output = generate_dataset(**vars(options))
+        except ValueError as exc:
+            dataset_parser.error(str(exc))
+        print(f"Saved dataset to {output}")
+        return
 
     defaults = DistortionConfig()
     parser = argparse.ArgumentParser(description="Apply PyTorch droplet distortion to an image.")
     parser.add_argument("--input", type=Path, help="Input image. Omit to use the Lorem ipsum example.")
     parser.add_argument("--output", type=Path, default=Path("distorted.png"))
+    parser.add_argument("--mask", type=Path,
+                        help="Same-size grayscale image: black disables displacement, white keeps it, gray scales it.")
     parser.add_argument("--centres", type=int, default=defaults.centre_count)
     parser.add_argument("--distribution", choices=[item.value for item in CentreDistribution], default=defaults.distribution.value)
     parser.add_argument("--radius", type=float, default=defaults.radius)
@@ -105,6 +128,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--show-original-grid must differ from --output")
 
     if args.refraction_matrices_mm:
+        if args.mask is not None:
+            parser.error("--mask requires image rendering, not --refraction-matrices-mm")
         try:
             matrices = refraction_distortion_matrices(
                 thickness_mm=5 if args.refraction_thickness_mm is None else args.refraction_thickness_mm,
@@ -119,6 +144,10 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     source = _load_image(args.input) if args.input else image_to_tensor(render_lorem_page())
+    try:
+        mask = load_mask(args.mask, source) if args.mask is not None else None
+    except (OSError, ValueError, TypeError) as exc:
+        parser.error(f"mask: {exc}")
     if args.page_warp:
         if args.page_warp == "refractive_index":
             try:
@@ -134,6 +163,7 @@ def main(argv: list[str] | None = None) -> None:
                     else args.refraction_direction,
                     page_width_mm=210 if args.page_width_mm is None else args.page_width_mm,
                     page_height_mm=297 if args.page_height_mm is None else args.page_height_mm,
+                    mask=mask,
                 )
             except ValueError as exc:
                 parser.error(str(exc))
@@ -148,6 +178,8 @@ def main(argv: list[str] | None = None) -> None:
                             frequency_x=args.lens_frequency_x, frequency_y=args.lens_frequency_y)
                         if args.page_warp == "sine_lens" else PAGE_WARPS[args.page_warp])
             field = page_warp_field(source, function)
+            if mask is not None:
+                field = field * mask.unsqueeze(-1)
             output = warp_image(source, field, intensity)
             if args.show_grid:
                 output = overlay_warped_grid(output, field, intensity, spacing=args.grid_spacing)
@@ -169,7 +201,7 @@ def main(argv: list[str] | None = None) -> None:
         centres = make_nonoverlapping_centres(
             source.shape[1], source.shape[2], args.radius, args.distribution, args.seed, source.device,
         )
-    _save_image(distort_image(source, config, centres), args.output)
+    _save_image(distort_image(source, config, centres, mask=mask), args.output)
     print(f"Saved distorted image to {args.output}")
 
 

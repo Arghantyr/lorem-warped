@@ -6,12 +6,14 @@ as 8-bit pixels. Pixel coordinates and displacement fields use (y, x).
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Callable
 
 import torch
 
+from .dataset_generator import generate_dataset
 from .core import (
     CentreDistribution, DistortionConfig, PAGE_WARPS, displacement_field,
     distort_image, gentle_pinch, horizontal_wave, image_to_tensor,
@@ -39,6 +41,7 @@ class WarpTransform:
     lens_options: dict = field(default_factory=dict)
     refraction_options: dict = field(default_factory=dict)
     warp_function: Callable | None = None
+    mask: str | Path | torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in (*PAGE_WARPS, "droplet", "refractive_index", "custom"):
@@ -61,17 +64,17 @@ class WarpTransform:
         """Return a warped CHW tensor on the input device, preserving gradients."""
         if self.mode == "droplet":
             config = self.config if self.intensity is None else replace(self.config, intensity=self.intensity)
-            return distort_image(image, config)
+            return distort_image(image, config, mask=self.mask)
         if self.mode == "refractive_index":
-            return refract_image(image, **self.refraction_options)
+            return refract_image(image, mask=self.mask, **self.refraction_options)
         function = self.warp_function if self.mode == "custom" else PAGE_WARPS[self.mode]
         if self.mode == "sine_lens":
             function = partial(sine_lens, **self.lens_options)
-        return warp_page(image, function, 3.0 if self.intensity is None else self.intensity)
+        return warp_page(image, function, 3.0 if self.intensity is None else self.intensity, mask=self.mask)
 
 
 __all__ = [
-    "WarpTransform", "CentreDistribution", "DistortionConfig", "PAGE_WARPS",
+    "WarpTransform", "CentreDistribution", "DistortionConfig", "PAGE_WARPS", "generate_dataset",
     "displacement_field", "distort_image", "gentle_pinch", "horizontal_wave",
     "image_to_tensor", "make_centres", "make_nonoverlapping_centres", "make_page_centres",
     "overlay_warped_grid", "page_warp_field", "parabolic_profile", "refract_image",

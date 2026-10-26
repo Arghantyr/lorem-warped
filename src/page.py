@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import torch
 from .tensor import _as_float_chw, warp_image
 
@@ -31,7 +32,8 @@ def page_warp_field(image: torch.Tensor, warp_function) -> torch.Tensor:
         raise ValueError("warp components must be finite")
     return field
 
-def warp_page(image: torch.Tensor, warp_function, intensity: float = 3.0) -> torch.Tensor:
+def warp_page(image: torch.Tensor, warp_function, intensity: float = 3.0,
+              mask: str | Path | torch.Tensor | None = None) -> torch.Tensor:
     """Warp the entire page with a coordinate function and pixel amplitude.
 
     Positive dy/dx move visible content down/right (backward bilinear sampling).
@@ -42,7 +44,7 @@ def warp_page(image: torch.Tensor, warp_function, intensity: float = 3.0) -> tor
         raise ValueError("intensity must be finite and non-negative")
     image = _as_float_chw(image)
     field = page_warp_field(image, warp_function)
-    return warp_image(image, field, intensity)
+    return warp_image(image, field, intensity, mask=mask)
 
 def _page_envelope(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """Pin all four page edges while allowing a smooth interior deformation."""

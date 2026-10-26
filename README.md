@@ -36,9 +36,29 @@ pixels = result.mul(255).round().byte().permute(1, 2, 0).cpu().numpy()
 Image.fromarray(pixels).save("horizontal_wave.png")
 ```
 
+## Mask the displacement
+
+Use `--mask` to control where a warp acts. The mask must have the same width and height as the input image. Black disables displacement, white keeps its full strength, and gray gives an intermediate strength. The mask scales the displacement field at output pixel positions before sampling; it does not blend two finished images. RGB mask files are converted to grayscale. Try the bundled left-to-right gradient, sized for `original.png`:
+
+```bash
+python -m lorem_warped --input original.png --mask examples/mask-gradient.png \
+  --page-warp sine_lens --intensity 32 --output masked.png
+```
+
+In Python, pass a mask path or a normalized H×W tensor with values in `[0, 1]`:
+
+```python
+from pathlib import Path
+
+result = WarpTransform(mode="sine_lens", intensity=32,
+                       mask=Path("examples/mask-gradient.png"))(image)
+```
+
+Masking also works with droplet and refractive-index modes, and with the `mask` argument to `warp_image`, `warp_page`, `distort_image`, and `refract_image`. In refraction, the two displacement fields are masked separately; a black mask does not remove the model's transmission/brightness effect. Invalid values or dimensions raise an error rather than resizing the mask. Omit the mask for an unmasked warp.
+
 ## Transformations and their extent
 
-The animations illustrate the visual behavior, not the exact parameters of the commands above. Geometric `--intensity` is a nonnegative pixel-displacement scale, not a brightness setting or a fixed maximum; high values can make text unreadable.
+The animations are cropped from `lorem-warped-motion-v7.mp4` to show only its white image panel. They illustrate the visual behavior, not the exact parameters of the commands above. Geometric `--intensity` is a nonnegative pixel-displacement scale, not a brightness setting or a fixed maximum; high values can make text unreadable.
 
 | Local and lens effects | Page-wide effects |
 | --- | --- |

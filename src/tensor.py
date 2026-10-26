@@ -7,8 +7,31 @@ from pathlib import Path
 from PIL import Image
 
 
-def warp_image(image: torch.Tensor, field: torch.Tensor, intensity: float) -> torch.Tensor:
-    """Backward bilinear warp of a float CHW image using a unit-amplitude field."""
+def load_mask(mask: str | Path | torch.Tensor, image: torch.Tensor) -> torch.Tensor:
+    """Load a grayscale file (or normalized HW tensor) as per-pixel field strength."""
+    _, height, width = image.shape
+    if isinstance(mask, (str, Path)):
+        with Image.open(mask) as source:
+            if source.size != (width, height):
+                raise ValueError(f"mask dimensions must match image (expected {width}x{height}, got {source.width}x{source.height})")
+            values = torch.from_numpy(np.array(source.convert("L"), copy=True)).to(
+                device=image.device, dtype=image.dtype) / 255.0
+    elif isinstance(mask, torch.Tensor):
+        values = mask.to(device=image.device, dtype=image.dtype)
+    else:
+        raise TypeError("mask must be a file path or an HW tensor")
+    if values.shape != (height, width):
+        raise ValueError(f"mask dimensions must match image ({height}x{width})")
+    if not torch.isfinite(values).all() or torch.any(values < 0) or torch.any(values > 1):
+        raise ValueError("mask values must be finite and in [0, 1]")
+    return values
+
+
+def warp_image(image: torch.Tensor, field: torch.Tensor, intensity: float,
+               mask: str | Path | torch.Tensor | None = None) -> torch.Tensor:
+    """Backward bilinear warp; mask scales the field before source sampling."""
+    if mask is not None:
+        field = field * load_mask(mask, image).unsqueeze(-1)
     if intensity == 0:
         return image.clone()
     _, height, width = image.shape

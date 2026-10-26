@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Reusable PyTorch image warps and CLI with Lorem ipsum examples"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.0", "numpy>=1.24", "Pillow>=9.0"]
+dependencies = ["torch>=2.0", "numpy>=1.24", "Pillow>=9.0", "Faker>=30"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "reportlab>=4", "PyMuPDF>=1.24", "tomli>=2; python_version < '3.11'"]
@@ -18,6 +18,9 @@ lorem-warped = "lorem_warped.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lorem_warped = ["mask-gradient.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import numpy as np
 import torch
-from .tensor import _as_float_chw, warp_image
+from .tensor import _as_float_chw, warp_image, load_mask
 from .page import overlay_warped_grid
 
 
@@ -113,6 +114,7 @@ def refract_image(
     n_z: float | None = None, show_grid: bool = False, grid_spacing: int = 40,
     direction_xyz: tuple[float, float, float] = (-1.0, 1.0, 1.0),
     page_width_mm: float = 210.0, page_height_mm: float = 297.0,
+    mask: str | Path | torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Two separately back-sampled polarization views through a uniform slab.
 
@@ -129,6 +131,8 @@ def refract_image(
             or not math.isfinite(polarization_deg)):
         raise ValueError("polarization_deg must be a finite angle in degrees")
     image = _as_float_chw(image)
+    if mask is not None:
+        mask = load_mask(mask, image)
     options = dict(thickness_mm=thickness_mm, n_x=n_x, n_y=n_y, n_z=n_z,
                    direction_xyz=direction_xyz, page_width_mm=page_width_mm,
                    page_height_mm=page_height_mm)
@@ -146,4 +150,4 @@ def refract_image(
     y_gain = math.sin(theta) ** 2 * transmission(n_y)
     if not x_field[0, 0].any() and not y_field[0, 0].any():
         return image * (x_gain + y_gain)
-    return warp_image(image, x_field, 1) * x_gain + warp_image(image, y_field, 1) * y_gain
+    return warp_image(image, x_field, 1, mask=mask) * x_gain + warp_image(image, y_field, 1, mask=mask) * y_gain

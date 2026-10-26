@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import numpy as np
 import pymupdf
 import torch
 from PIL import Image as PILImage, ImageDraw, ImageFont
@@ -222,6 +223,41 @@ def build(input_path: Path, output: Path) -> None:
         collage.save(collage_path)
         galleries[mode]["readme_grid"] = str(collage_path)
 
+    # The mask demonstration uses a readable crop of the same input. Its own
+    # full-range gradient spans that crop; the bundled example spans original.png.
+    mask_source = generated / "mask_source.png"
+    mask_path = generated / "mask_gradient.png"
+    checkerboard_path = generated / "mask_checkerboard.png"
+    unmasked_path = generated / "unmasked_sine_lens.png"
+    masked_path = generated / "mask_sine_lens.png"
+    checkerboard_warp_path = generated / "checkerboard_sine_lens.png"
+    source_rgb.crop(crop_box).save(mask_source)
+    gradient = PILImage.new("L", (crop_w, 1))
+    gradient.putdata([round(255 * x / max(crop_w - 1, 1)) for x in range(crop_w)])
+    gradient.resize((crop_w, crop_h), PILImage.Resampling.NEAREST).save(mask_path)
+    yy, xx = np.indices((crop_h, crop_w))
+    checkerboard = (((yy * 7 // crop_h + xx * 7 // crop_h) % 2) * 255).astype(np.uint8)
+    PILImage.fromarray(checkerboard, mode="L").save(checkerboard_path)
+    mask_intensity = 128
+    sample_tensor = image_to_tensor(source_rgb.crop(crop_box))
+    unmasked = WarpTransform(mode="sine_lens", intensity=mask_intensity)(sample_tensor)
+    unmasked_pixels = unmasked.mul(255).round().byte().permute(1, 2, 0).cpu().numpy()
+    PILImage.fromarray(unmasked_pixels).save(unmasked_path)
+    masked = WarpTransform(mode="sine_lens", intensity=mask_intensity,
+                           mask=mask_path)(sample_tensor)
+    masked_pixels = masked.mul(255).round().byte().permute(1, 2, 0).cpu().numpy()
+    PILImage.fromarray(masked_pixels).save(masked_path)
+    checker_warp = WarpTransform(mode="sine_lens", intensity=mask_intensity,
+                                 mask=checkerboard_path)(sample_tensor)
+    checker_pixels = checker_warp.mul(255).round().byte().permute(1, 2, 0).cpu().numpy()
+    PILImage.fromarray(checker_pixels).save(checkerboard_warp_path)
+    mask_section = {"source_path": str(mask_source), "mask_path": str(mask_path),
+                    "unmasked_path": str(unmasked_path), "masked_path": str(masked_path),
+                    "checkerboard_path": str(checkerboard_path),
+                    "checkerboard_warp_path": str(checkerboard_warp_path),
+                    "checker_square_size_px": crop_h / 7, "intensity": mask_intensity,
+                    "field": "sine_lens", "mask_values": [0, 255]}
+
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="ManualTitle", parent=styles["Title"], fontSize=22,
                               leading=27, textColor=colors.HexColor("#17324d"), spaceAfter=14))
@@ -274,7 +310,7 @@ def build(input_path: Path, output: Path) -> None:
         return table
 
     story.append(Paragraph("Image transformations with PyTorch", styles["ManualTitle"]))
-    paragraph("Operator manual | lorem-warped | Version 1.3")
+    paragraph("Operator manual | lorem-warped | Version 1.4")
     paragraph("This manual uses selected writing principles from ASD-STE100 Issue 9. It is not certified ASD-STE100 documentation. Formal conformity needs a controlled-dictionary and rule review.")
     heading("1. Package introduction")
     paragraph("lorem-warped applies independent PyTorch image transformations to a single RGB image. It includes droplet layouts, page waves, a six-control sine lens, a gentle pinch, a refractive-index slab, and a Python-only custom callback. Input and output are CHW tensors; the CLI writes PNG files.")
@@ -490,6 +526,24 @@ def build(input_path: Path, output: Path) -> None:
     code("python docs/build_manual.py --input original.png \\\n  --output docs/lorem-warped-manual.pdf\npython -m pytest -q", "a. CLI")
     paragraph("Writing reference: ASD-STE100 Issue 9 (January 15, 2025), https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf. Software reference: https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.grid_sample.html. Formal STE conformity is not claimed.")
 
+    story.append(PageBreak())
+    heading("13. Mask the displacement")
+    paragraph("Use a grayscale mask with exactly the same width and height as the image. At each output pixel, black (0) cancels both displacement components; white (255) keeps the full field. Gray scales both components continuously: 128 gives about half strength. The sampler reads the original at the resulting coordinates. It does not blend an unwarped and a warped image, and it does not change image alpha.")
+    paragraph("All three results use the same text crop and sine-lens field at 128 px intensity. Row 1 compares the original with an unmasked warp. Row 2 shows a left-to-right gradient mask and its result. Row 3 shows a black-and-white checkerboard mask and its result; each square has side length one-seventh of the crop height in both axes. Only the mask changes. The bundled examples/mask-gradient.png matches the full 1200-by-1600 original.png.")
+    def mask_cell(path, caption):
+        return [figure(path, 73 * mm, 34 * mm), Paragraph(caption, styles["ManualCaption"])]
+    mask_panels = [
+        [mask_cell(mask_source, "Original text"), mask_cell(unmasked_path, "Without mask")],
+        [mask_cell(mask_path, "Gradient mask"), mask_cell(masked_path, "With gradient mask")],
+        [mask_cell(checkerboard_path, "Checkerboard mask"),
+         mask_cell(checkerboard_warp_path, "With checkerboard mask")],
+    ]
+    story.append(framed_table(mask_panels, [84 * mm] * 2, [44 * mm] * 3))
+    paragraph("Run this command on the bundled full-size image. To use another input, make a mask of its exact size; the program does not resize the mask. Omit --mask to keep the unmasked behavior.")
+    code("python -m lorem_warped --input original.png \\\n  --mask examples/mask-gradient.png --page-warp sine_lens \\\n  --intensity 128 --output masked.png", "a. CLI")
+    code("from pathlib import Path\ntransform = WarpTransform(mode='sine_lens', intensity=128,\n    mask=Path('examples/mask-gradient.png'))\nsave('masked.png', transform(source))", "b. in script")
+    paragraph("The mask also works with droplets, page/custom warps, and refraction. Refraction retains optical transmission. Python accepts normalized H-by-W tensors; the CLI converts color files to grayscale. Mismatched sizes fail.")
+
     doc = BaseDocTemplate(str(output), pagesize=A4, leftMargin=18 * mm,
                           rightMargin=18 * mm, topMargin=17 * mm, bottomMargin=20 * mm,
                           title="lorem-warped: PyTorch Image Transformations", author="lorem-warped contributors")
@@ -498,6 +552,11 @@ def build(input_path: Path, output: Path) -> None:
     doc.addPageTemplates(PageTemplate(id="Manual", frames=[frame], onPage=footer))
     doc.build(story)
     with pymupdf.open(output) as pdf:
+        mask_hits = [index + 1 for index, page in enumerate(pdf)
+                     if page.search_for("13. Mask the displacement")]
+        if len(mask_hits) != 1 or len(pdf[mask_hits[0] - 1].get_image_info()) != 6:
+            raise RuntimeError("The mask chapter must show a 3-by-2 original, unmasked, gradient and checkerboard comparison")
+        mask_section["page"] = mask_hits[0]
         overview_hits = [index + 1 for index, page in enumerate(pdf)
                          if page.search_for("1.1 Distortion overview")]
         distribution_hits = [index + 1 for index, page in enumerate(pdf)
@@ -552,7 +611,7 @@ def build(input_path: Path, output: Path) -> None:
     manifest = {"input": str(input_path.resolve()), "crop_xyxy": crop_box,
                 "lens_parameters": LENS, "overview": overview,
                 "distributions": distributions, "galleries": galleries,
-                "atlas": atlas}
+                "atlas": atlas, "mask": mask_section}
     (generated / "manual-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Built {output} with {len(galleries)} six-panel transformation galleries")
 

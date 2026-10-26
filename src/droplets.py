@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
 import torch
-from .tensor import _as_float_chw, _validate_centres, warp_image
+from .tensor import _as_float_chw, _validate_centres, warp_image, load_mask
 
 
 class CentreDistribution(str, Enum):
@@ -36,6 +37,7 @@ def distort_image(
     image: torch.Tensor,
     config: DistortionConfig,
     centres: torch.Tensor | None = None,
+    mask: str | Path | torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Apply radial droplet distortions to a CHW image tensor.
 
@@ -59,10 +61,12 @@ def distort_image(
     centres = _validate_centres(centres, height, width, image.device)
 
     if centres.numel() == 0 or config.intensity == 0:
+        if mask is not None:
+            load_mask(mask, image)
         return image.clone()
 
     field = displacement_field(image, config.radius, centres, profile=config.profile)
-    return warp_image(image, field, config.intensity)
+    return warp_image(image, field, config.intensity, mask=mask)
 
 def displacement_field(
     image: torch.Tensor, radius: float, centres: torch.Tensor,
