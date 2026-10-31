@@ -19,16 +19,10 @@ The CLI opens an image file with Pillow. It converts the image to RGB. It saves 
    python -m pip install -e .
    ```
 
-3. Confirm the CLI installation:
+3. From the source checkout, confirm the module CLI:
 
    ```sh
-   lorem-warp --help
-   ```
-
-4. If the command is not available, use the module form:
-
-   ```sh
-   python -m lorem_warped_examples --help
+   python -m src --help
    ```
 
 The package requires Python 3.10 or later. It also requires PyTorch, NumPy, and Pillow. The installation command installs these declared dependencies.
@@ -42,22 +36,49 @@ The package requires Python 3.10 or later. It also requires PyTorch, NumPy, and 
 
 ```python
 import torch
-from lorem_warped_examples import WarpTransform
+from src import WarpTransform
 
 image = torch.rand(3, 256, 256)
-transform = WarpTransform(mode="horizontal_wave", intensity=5)
+transform = WarpTransform(mode="horizontal_wave", wavelength=28, intensity=20)
 warped = transform(image)
 assert warped.shape == image.shape
 ```
 
 The result stays on the input device. Float image gradients can flow through geometric page warps. A droplet transform can also retain center gradients away from its support boundary.
 
+`horizontal_wave` moves text left/right and repeats along image Y; `vertical_wave` moves text up/down and repeats along image X. The optional `wavelength` is the period in source-image pixels, independent of the pixel-displacement `intensity`. Use `WarpTransform(mode="vertical_wave", wavelength=28, intensity=20)` for the other direction. Omitting wavelength preserves the original three-cycle horizontal or two-cycle vertical page-wide wave.
+
+### Compare wave wavelengths and intensities
+
+If the source text has a 28px font, periods at 50%, 100%, 150%, 200%, and 250% of that size are 14, 28, 42, 56, and 70px. Compare each period against independent displacement intensities of 10, 20, 30, 40, and 50px. From the source checkout, generate labeled 5×5 grids and full-resolution images for both built-in directions:
+
+```sh
+python -m src.wave_samples --input original.png --font-size-px 28
+```
+
+Pass `--output-dir PATH` to choose a destination. The generator writes `manifest.json` with each sample's source-pixel wavelength and intensity. Use the actual font size of your own input for `--font-size-px`.
+
+### Combine waves with a Python callback
+
+`custom_wave` moves pixels on both axes and is available through the Python API only. One component can have a fixed quarter-page period, or both can use the same source-pixel wavelength:
+
+```python
+from functools import partial
+from src import WarpTransform, custom_wave
+
+for variant in ("vertical", "horizontal", "symmetric"):
+    callback = partial(custom_wave, wavelength=28, fixed_axis=variant)
+    warped = WarpTransform(mode="custom", intensity=20, warp_function=callback)(image)
+```
+
+With `fixed_axis="vertical"`, the up/down component repeats every 25% of image width along X, while the left/right component uses `wavelength` along Y. With `fixed_axis="horizontal"`, the left/right component repeats every 25% of image height along Y, while the up/down component uses `wavelength` along X. `symmetric` uses the same pixel period along both axes. To generate all three 5×5 comparison grids, run `python -m src.wave_samples --custom-wave --input original.png --font-size-px 28`. There is no `--page-warp custom_wave` option; the top-level CLI cannot accept a callback.
+
 ## Apply a droplet warp in Python
 
 The default mode is `droplet`. Use `DistortionConfig` to set the droplet positions and shape.
 
 ```python
-from lorem_warped_examples import DistortionConfig, WarpTransform
+from src import DistortionConfig, WarpTransform
 
 config = DistortionConfig(
     centre_count=4,
@@ -125,7 +146,7 @@ The function returns two tensors in `(dy, dx)` order. Each output tensor must ha
 
 ```python
 import torch
-from lorem_warped_examples import WarpTransform
+from src import WarpTransform
 
 
 def shift_right(y, x):
@@ -147,11 +168,11 @@ A positive `dx` moves visible content to the right. The sampler reads an input p
 2. Run this command:
 
    ```sh
-   lorem-warp --input source.png --output wave.png \
-     --page-warp horizontal_wave --intensity 5
+   python -m src --input source.png --output wave.png \
+     --page-warp horizontal_wave --wavelength 28 --intensity 20
    ```
 
-3. Open `wave.png` to check the result.
+3. Open `wave.png` to check the result. For up/down movement instead, choose `--page-warp vertical_wave` with the same wavelength and intensity flags.
 
 Omit `--input` to create a Lorem ipsum page. Its default size is 1200 by 1600 pixels. The default output path is `distorted.png` in the current directory.
 
@@ -160,7 +181,7 @@ Omit `--input` to create a Lorem ipsum page. Its default size is 1200 by 1600 pi
 The grid helps you see the movement of the image. The grid lines use the same geometric field as the image.
 
 ```sh
-lorem-warp --input source.png --output wave-grid.png \
+python -m src --input source.png --output wave-grid.png \
   --page-warp vertical_wave --intensity 5 --show-grid \
   --show-original-grid source-grid.png --grid-spacing 40
 ```
@@ -174,12 +195,12 @@ For refraction, the CLI puts the grid on the source before it samples each polar
 | Mode | Function | Key controls |
 | --- | --- | --- |
 | `droplet` | Moves pixels around selected centers. | `centre_count`, `radius`, `profile`, `intensity` |
-| `horizontal_wave` | Moves pixels left and right across the page. | `intensity` |
-| `vertical_wave` | Moves pixels up and down across the page. | `intensity` |
+| `horizontal_wave` | Moves pixels left and right, varying along Y. | `wavelength` in source pixels (optional), `intensity` |
+| `vertical_wave` | Moves pixels up and down, varying along X. | `wavelength` in source pixels (optional), `intensity` |
 | `gentle_pinch` | Moves pixels toward the page center. | `intensity` |
 | `sine_lens` | Makes a repeated geometric lens field. | lens counts, gains, frequencies, phases, `intensity` |
 | `refractive_index` | Samples two optical views through a uniform slab. | thickness, indices, direction, page size, polarization |
-| `custom` | Uses a Python coordinate function. | function, `intensity` |
+| `custom` | Uses a Python coordinate function, including `custom_wave`. | function, `intensity`; callback-specific `wavelength` and `fixed_axis` |
 
 The CLI uses droplets if you omit `--page-warp`. The CLI cannot take a Python custom function.
 
@@ -204,6 +225,7 @@ The scripts `generate_page_warp_examples.py` and `generate_distortion_examples.p
 - If a custom function fails, check the field shape, device, type, and finite values.
 - If parabolic droplets overlap, use `make_nonoverlapping_centres` for the image size.
 - If a page warp does not move pixels, increase geometric intensity or inspect the source image.
+- If a wave period is rejected, use a finite positive pixel value and select `horizontal_wave` or `vertical_wave`; pass a custom-wave period into its Python callback instead.
 - If the optical output has no local distortion, check the slab geometry and the viewing direction.
 - If the CLI rejects lens flags, select `--page-warp sine_lens`.
 - If the CLI rejects refraction flags, select `--page-warp refractive_index`.

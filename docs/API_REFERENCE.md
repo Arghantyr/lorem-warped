@@ -1,6 +1,6 @@
 # Python API reference
 
-This reference describes the names exported by `lorem_warped_examples`. All image functions take one CHW tensor. A field has shape `(height, width, 2)` and stores `(dy, dx)` values.
+This reference describes the names exported by `src` when running from the source checkout. All image functions take one CHW tensor. A field has shape `(height, width, 2)` and stores `(dy, dx)` values.
 
 ## Input and output contract
 
@@ -17,6 +17,7 @@ This reference describes the names exported by `lorem_warped_examples`. All imag
 WarpTransform(
     mode="droplet",
     intensity=None,
+    wavelength=None,
     config=DistortionConfig(),
     lens_options={},
     refraction_options={},
@@ -30,6 +31,7 @@ WarpTransform(
 | --- | --- |
 | `mode` | Selects `droplet`, one page mode, `refractive_index`, or `custom`. |
 | `intensity` | Sets geometric displacement in pixels. `None` uses the mode default. |
+| `wavelength` | Positive, finite source-pixel period for `horizontal_wave` or `vertical_wave` only. `None` retains the original page-relative wave. |
 | `config` | Supplies the settings for `droplet`. |
 | `lens_options` | Supplies keyword arguments to `sine_lens`. Use only with `sine_lens`. |
 | `refraction_options` | Supplies keyword arguments to `refract_image`. Use only with `refractive_index`. |
@@ -38,6 +40,8 @@ WarpTransform(
 For droplets, the default intensity is `config.intensity`, which starts at 12 pixels. An explicit transform intensity replaces it. For geometric page modes, the default transform intensity is 3 pixels.
 
 The refraction mode does not accept a transform intensity. It uses thickness and page size to set the image displacement. `WarpTransform` checks its mode and option groups during construction. Some option values are checked when the transform runs.
+
+For example, `WarpTransform(mode="horizontal_wave", wavelength=28, intensity=20)(image)` moves text left/right, repeating every 28 source pixels along Y. Use `vertical_wave` for up/down movement repeating along X. `wavelength` is not an intensity and cannot be set on other modes, including `custom`; use a configured callback for custom waves instead.
 
 ## Droplet settings
 
@@ -69,7 +73,7 @@ This function applies a droplet warp. `centres` is an optional `(N, 2)` tensor i
 
 ```python
 import torch
-from lorem_warped_examples import DistortionConfig, distort_image
+from src import DistortionConfig, distort_image
 
 image = torch.rand(3, 64, 96)
 centres = torch.tensor([[20.0, 30.0], [40.0, 70.0]])
@@ -116,12 +120,38 @@ This lower-level function applies a field with backward bilinear sampling. It mu
 
 | Name | Field direction |
 | --- | --- |
-| `horizontal_wave(y, x)` | Moves image content left or right. |
-| `vertical_wave(y, x)` | Moves image content up or down. |
+| `horizontal_wave(y, x, wavelength=None)` | Moves image content left or right; period varies along Y. |
+| `vertical_wave(y, x, wavelength=None)` | Moves image content up or down; period varies along X. |
 | `gentle_pinch(y, x)` | Moves image content toward the page center. |
 | `sine_lens(y, x, ...)` | Makes a repeated geometric lens field. |
 
 The built-in functions return `(dy, dx)` tensors. A page envelope keeps the field at zero on the page edges for the simple wave and pinch modes.
+
+For the built-in waves, `wavelength` is a positive, finite number of **source-image pixels**, not a cycle count or fraction of the page. Omitting it preserves the legacy three-cycle horizontal or two-cycle vertical wave across the whole image. Pass a period to `WarpTransform`, or bind it when calling `warp_page` or `page_warp_field` directly:
+
+```python
+from functools import partial
+import torch
+from src import horizontal_wave, vertical_wave, warp_page
+
+image = torch.rand(3, 256, 256)
+horizontal = warp_page(image, partial(horizontal_wave, wavelength=28), intensity=20)
+vertical = warp_page(image, partial(vertical_wave, wavelength=28), intensity=20)
+```
+
+### `custom_wave(y, x, *, wavelength, fixed_axis="vertical")`
+
+This Python-only coordinate function combines horizontal and vertical waves and returns `(dy, dx)`. The period is a positive, finite source-pixel value; both components have a page-edge taper. `fixed_axis="vertical"` holds the vertical-wave period at 25% of image width (along X) and applies `wavelength` to the horizontal wave (along Y). `fixed_axis="horizontal"` holds the horizontal-wave period at 25% of image height (along Y) and applies `wavelength` to the vertical wave (along X). `fixed_axis="symmetric"` uses `wavelength` on both X and Y, with no fixed quarter-page period.
+
+```python
+from functools import partial
+from src import WarpTransform, custom_wave
+
+wave = partial(custom_wave, wavelength=28, fixed_axis="symmetric")
+warped = WarpTransform(mode="custom", intensity=20, warp_function=wave)(image)
+```
+
+`custom_wave` is a callback, not a `PAGE_WARPS` mode. There is no `--page-warp custom_wave` or CLI custom-function option. The transform's `wavelength` argument is for the two built-in wave modes only.
 
 ### `sine_lens` options
 

@@ -1,9 +1,9 @@
 # CLI reference
 
-The installed command is `lorem-warp`. The module command is `python -m lorem_warped_examples`. Both commands use the same options.
+From the source checkout, run the CLI with `python -m src` (or `.venv/bin/python -m src` in the project virtual environment).
 
 ```sh
-lorem-warp --help
+python -m src --help
 ```
 
 The CLI uses droplets when you do not set `--page-warp`. The default output path is `distorted.png`. The CLI makes a Lorem ipsum page when you do not set `--input`.
@@ -16,6 +16,7 @@ The CLI uses droplets when you do not set `--page-warp`. The default output path
 | `--output PATH` | `distorted.png` | Save the output image file. |
 | `--page-warp NAME` | Droplets | Select `horizontal_wave`, `vertical_wave`, `gentle_pinch`, `sine_lens`, or `refractive_index`. |
 | `--intensity NUMBER` | 12 pixels for geometric modes | Set geometric displacement in pixels. Do not use it for refraction. |
+| `--wavelength PIXELS` | Legacy page-relative period | Set a finite, positive source-pixel wave period; requires `horizontal_wave` or `vertical_wave`. |
 
 The Python `WarpTransform` uses 3 pixels by default for geometric page modes. The CLI uses 12 pixels by default. Set `--intensity` to make a CLI result match an explicit Python setting.
 
@@ -35,12 +36,12 @@ These options set the droplet field when you omit `--page-warp`.
 The parabolic profile rejects overlapping droplets. Use `--nonoverlapping-page` when you need disjoint droplets across the page. The droplet diameter must fit inside the image.
 
 ```sh
-lorem-warp --input source.png --output droplets.png \
+python -m src --input source.png --output droplets.png \
   --centres 4 --radius 20 --intensity 5 --seed 7
 ```
 
 ```sh
-lorem-warp --input source.png --output separate.png \
+python -m src --input source.png --output separate.png \
   --profile parabolic --radius 20 --nonoverlapping-page
 ```
 
@@ -48,12 +49,16 @@ Do not combine `--nonoverlapping-page` with `--page-warp`. The CLI rejects this 
 
 ## Page-warp options
 
-Use `--page-warp NAME` to select a page function. `horizontal_wave`, `vertical_wave`, and `gentle_pinch` use only the geometric intensity setting.
+Use `--page-warp NAME` to select a page function. `horizontal_wave` and `vertical_wave` accept `--wavelength PIXELS` as well as `--intensity`; `gentle_pinch` uses only intensity. Horizontal waves move text left/right with a period along Y; vertical waves move it up/down with a period along X. Wavelength is a distance between repetitions in source pixels, not the number of cycles. Omitting it preserves the original three-cycle horizontal or two-cycle vertical page-wide wave.
 
 ```sh
-lorem-warp --input source.png --output wave.png \
-  --page-warp horizontal_wave --intensity 5
+python -m src --input source.png --output horizontal-wave.png \
+  --page-warp horizontal_wave --wavelength 28 --intensity 20
+python -m src --input source.png --output vertical-wave.png \
+  --page-warp vertical_wave --wavelength 28 --intensity 20
 ```
+
+`--wavelength` rejects zero, negative, and nonfinite values, and cannot be used with droplets, pinch, lens, or refraction. The CLI does not accept Python callbacks, so the combined `custom_wave` variants are Python-only; see the [Python API](API_REFERENCE.md).
 
 ### Lens options
 
@@ -73,7 +78,7 @@ These options require `--page-warp sine_lens`.
 The gain values multiply the field before the global pixel intensity. A phase of `0.25` is one quarter of a full cycle. A fractional frequency or nonzero phase adds an edge taper.
 
 ```sh
-lorem-warp --input source.png --output lens.png \
+python -m src --input source.png --output lens.png \
   --page-warp sine_lens --intensity 20 \
   --lens-a 2 --lens-b 3 --lens-frequency-x 2.5
 ```
@@ -91,7 +96,7 @@ These options require a page-warp mode.
 | `--grid-spacing PIXELS` | `40` | Set the source-pixel distance between grid lines. |
 
 ```sh
-lorem-warp --input source.png --output wave-grid.png \
+python -m src --input source.png --output wave-grid.png \
   --page-warp vertical_wave --intensity 5 \
   --show-grid --show-original-grid source-grid.png --grid-spacing 40
 ```
@@ -117,7 +122,7 @@ These options require `--page-warp refractive_index`. They do not apply to geome
 The thickness must be nonnegative and finite. The indices and page dimensions must be positive and finite. The direction must have three finite values and a positive Z value.
 
 ```sh
-lorem-warp --input source.png --output refraction.png \
+python -m src --input source.png --output refraction.png \
   --page-warp refractive_index \
   --refraction-thickness-mm 5 \
   --refraction-n-x 1.3 --refraction-n-y 2.5 \
@@ -127,7 +132,7 @@ lorem-warp --input source.png --output refraction.png \
 This command prints matrices in physical millimeters. It does not need an input image or a page size:
 
 ```sh
-lorem-warp --page-warp refractive_index --refraction-matrices-mm
+python -m src --page-warp refractive_index --refraction-matrices-mm
 ```
 
 The JSON object has `unit` and `matrices_mm` keys. It has two 3-by-3 matrices. The translation values in these matrices are millimeters, not pixels.
@@ -136,6 +141,6 @@ A uniform slab does not make a spatially varying warp at normal incidence. The m
 
 ## Command errors
 
-The CLI rejects unsupported combinations before it writes an output file. It also rejects invalid lens frequencies, lens counts, grid spacing, and several physical values. An absent input file or an output path error can produce a file-system exception.
+The CLI rejects unsupported combinations before it writes an output file. It also rejects invalid wavelength values, lens frequencies, lens counts, grid spacing, and several physical values. An absent input file or an output path error can produce a file-system exception.
 
 Use `--help` to see the option names in the installed version. Use the [Python API](API_REFERENCE.md) if you need a custom page function.
