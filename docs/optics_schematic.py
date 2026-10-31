@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from lorem_warped import refraction_distortion_matrices
+from src import refraction_distortion_matrices
 
 NO, NE, THICKNESS_MM = 1.5, 2.0, 5.0
 DIRECTION = (-1.0, 0.0, 1.0)  # 45 degrees from slab normal, in the X-Z plane

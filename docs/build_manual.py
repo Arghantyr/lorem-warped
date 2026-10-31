@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import (CentreDistribution, DistortionConfig, WarpTransform,
                  custom_wave as pixel_custom_wave, image_to_tensor, make_centres, overlay_warped_grid)
 from src.wave_samples import generate_custom_wave_grids, generate_wave_grids, PERCENTAGES, INTENSITIES
-from manual_atlas import build_atlas, overlay_droplet_guides
+from manual_atlas import build_atlas, overlay_droplet_guides, source_paragraph
 
 
 LENS = dict(frequency_x=2.5, frequency_y=1.5, phase_x=0.1,
@@ -648,6 +648,40 @@ def build(input_path: Path, output: Path) -> None:
                 grid_path = next(path for label, path in wave_studies if label == name)
                 append_wave_study(number, index, name, grid_path)
 
+    # One controlled source and wave strength for all four taper/shift cases.
+    shift_grid = overlay_warped_grid(image_to_tensor(source_paragraph()),
+                                     spacing=28, opacity=.24)
+    shift_source_path = generated / "edge_taper_shift_source.png"
+    PILImage.fromarray(shift_grid.mul(255).round().byte().permute(1, 2, 0).cpu().numpy()).save(shift_source_path)
+    with PILImage.open(shift_source_path) as shift_input:
+        shift_source = image_to_tensor(shift_input)
+    shift_panels = []
+    for label, dx, dy in (("edge_taper=True", 0, 0),
+                          ("X shifted transform", 18, 0),
+                          ("Y shifted transform", 0, 12),
+                          ("XY shifted transform", 18, 12)):
+        path = generated / f"edge_taper_shift_{dx}_{dy}.png"
+        result = WarpTransform(mode="horizontal_wave", wavelength=28, intensity=4,
+                               edge_taper=True, shift_X=dx, shift_Y=dy)(shift_source)
+        PILImage.fromarray(result.mul(255).round().byte().permute(1, 2, 0).cpu().numpy()).save(path)
+        shift_panels.append({"label": label, "path": str(path), "shift_X": dx,
+                             "shift_Y": dy, "edge_taper": dx == dy == 0,
+                             "mode": "horizontal_wave", "wavelength": 28, "intensity": 4})
+    story.append(PageBreak())
+    heading("12. Edge taper and pixel shifts")
+    paragraph("Compare the same four-line text and straight reference grid in all four panels. Use horizontal_wave, wavelength 28 px, and intensity 4 px. The first panel uses edge_taper=True and zero shifts: wave displacement is exactly 0 px at each page edge. X and Y are right and down. Negative values move left and up.")
+    paragraph("A nonzero shift_X or shift_Y overrides edge_taper=True: the wave itself becomes untapered before the pixel translation is added. These shifts are absolute pixels, not multiples of intensity. Both the wave and the translation are scaled by a displacement mask if one is supplied. Droplets and physical refraction do not accept these page-warp controls.")
+    shift_rows = []
+    for start in (0, 2):
+        shift_rows.append([[figure(panel["path"], 73 * mm, 45 * mm),
+                            Paragraph(f"{panel['label']}<br/>shift_X={panel['shift_X']} px; shift_Y={panel['shift_Y']} px",
+                                      styles["ManualCaption"])]
+                           for panel in shift_panels[start:start + 2]])
+    story.append(framed_table(shift_rows, [84 * mm] * 2, [62 * mm] * 2))
+    paragraph("Create mini-grid.png with section 4.1. All four images above use that same input; only the two shift values change. The code explicitly requests tapering so the shift override is visible.")
+    code("python -m src --input mini-grid.png --output shift-xy.png \\\n  --page-warp horizontal_wave --wavelength 28 \\\n  --intensity 4 --edge-taper --shift-X 18 --shift-Y 12", "a. CLI: XY shift")
+    code("small = image_to_tensor(Image.open('mini-grid.png'))\nfor name, dx, dy in (('taper', 0, 0), ('x', 18, 0),\n                     ('y', 0, 12), ('xy', 18, 12)):\n    transform = WarpTransform(mode='horizontal_wave',\n        wavelength=28, intensity=4, edge_taper=True,\n        shift_X=dx, shift_Y=dy)\n    save('shift-' + name + '.png', transform(small))", "b. in script: all four panels")
+
     doc = BaseDocTemplate(str(output), pagesize=A4, leftMargin=18 * mm,
                           rightMargin=18 * mm, topMargin=17 * mm, bottomMargin=20 * mm,
                           title="lorem-warped: PyTorch Image Transformations", author="lorem-warped contributors")
@@ -660,6 +694,13 @@ def build(input_path: Path, output: Path) -> None:
                       if "Two-parameter wavelength study" in page.get_text()]
         if len(wave_pages) != 5 or any(len(pdf[n - 1].get_image_info()) != 1 for n in wave_pages):
             raise RuntimeError("The five wavelength-by-intensity grids must each occupy one illustrated page")
+        shift_hits = [i + 1 for i, page in enumerate(pdf)
+                      if page.search_for("12. Edge taper and pixel shifts")]
+        if len(shift_hits) != 1 or len(pdf[shift_hits[0] - 1].get_image_info()) != 4:
+            raise RuntimeError("The four taper/shift panels must share one illustrated page")
+        shift_page = pdf[shift_hits[0] - 1].get_text()
+        if "b. in script: all four panels" not in shift_page or "shift_Y=12" not in shift_page:
+            raise RuntimeError("The taper/shift recipe must remain on its illustrated page")
         mask_hits = [index + 1 for index, page in enumerate(pdf)
                      if page.search_for("6.4 Mask the displacement")]
         if len(mask_hits) != 1 or len(pdf[mask_hits[0] - 1].get_image_info()) != 6:
@@ -724,7 +765,9 @@ def build(input_path: Path, output: Path) -> None:
                                  for (name, path), n in zip(wave_studies, wave_pages)],
                 "lens_parameters": LENS, "overview": overview,
                 "distributions": distributions, "galleries": galleries,
-                "atlas": atlas, "mask": mask_section}
+                "atlas": atlas, "mask": mask_section,
+                "edge_taper_shift_examples": {"page": shift_hits[0], "source": str(shift_source_path),
+                                              "panels": shift_panels}}
     (generated / "manual-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Built {output} with {len(galleries)} six-panel transformation galleries")
 
