@@ -48,6 +48,22 @@ The result stays on the input device. Float image gradients can flow through geo
 
 `horizontal_wave` moves text left/right and repeats along image Y; `vertical_wave` moves text up/down and repeats along image X. The optional `wavelength` is the period in source-image pixels, independent of the pixel-displacement `intensity`. Use `WarpTransform(mode="vertical_wave", wavelength=28, intensity=20)` for the other direction. Omitting wavelength preserves the original three-cycle horizontal or two-cycle vertical page-wide wave.
 
+### Compare edge taper and pixel shifts
+
+Geometric page warps enable `edge_taper=True` by default. Without shifts, wave displacement is exactly zero at all four boundaries. Set `edge_taper=False` to remove the edge envelope. Set `shift_X` to move content right or `shift_Y` to move it down; use negative values for the opposite directions. Shifts are absolute pixels, separate from intensity. A nonzero shift disables tapering even if `edge_taper=True` is specified. Droplets and physical refraction do not accept these controls. For arbitrary Python callbacks, shifts translate the returned field, but only built-in functions and `custom_wave` have their taper overridden automatically.
+
+```python
+from src import WarpTransform
+
+settings = dict(mode="horizontal_wave", wavelength=28, intensity=20, edge_taper=True)
+tapered = WarpTransform(**settings)(image)
+x_shifted = WarpTransform(**settings, shift_X=18)(image)
+y_shifted = WarpTransform(**settings, shift_Y=12)(image)
+xy_shifted = WarpTransform(**settings, shift_X=18, shift_Y=12)(image)
+```
+
+See the four-panel comparison in chapter 12 of the [operator manual](lorem-warped-manual.pdf). A mask scales the translation as well as the wave field. Unlike `lens_options` phases (fractions of a cycle), shifts are pixel distances.
+
 ### Compare wave wavelengths and intensities
 
 If the source text has a 28px font, periods at 50%, 100%, 150%, 200%, and 250% of that size are 14, 28, 42, 56, and 70px. Compare each period against independent displacement intensities of 10, 20, 30, 40, and 50px. From the source checkout, generate labeled 5×5 grids and full-resolution images for both built-in directions:
@@ -174,6 +190,8 @@ A positive `dx` moves visible content to the right. The sampler reads an input p
 
 3. Open `wave.png` to check the result. For up/down movement instead, choose `--page-warp vertical_wave` with the same wavelength and intensity flags.
 
+Add `--no-edge-taper` to disable the page-edge envelope. Add `--shift-X 18`, `--shift-Y 12`, or both to translate the page; either nonzero shift overrides `--edge-taper`. These flags require a geometric page-warp mode.
+
 Omit `--input` to create a Lorem ipsum page. Its default size is 1200 by 1600 pixels. The default output path is `distorted.png` in the current directory.
 
 ## Add a diagnostic grid
@@ -195,12 +213,12 @@ For refraction, the CLI puts the grid on the source before it samples each polar
 | Mode | Function | Key controls |
 | --- | --- | --- |
 | `droplet` | Moves pixels around selected centers. | `centre_count`, `radius`, `profile`, `intensity` |
-| `horizontal_wave` | Moves pixels left and right, varying along Y. | `wavelength` in source pixels (optional), `intensity` |
-| `vertical_wave` | Moves pixels up and down, varying along X. | `wavelength` in source pixels (optional), `intensity` |
-| `gentle_pinch` | Moves pixels toward the page center. | `intensity` |
-| `sine_lens` | Makes a repeated geometric lens field. | lens counts, gains, frequencies, phases, `intensity` |
+| `horizontal_wave` | Moves pixels left and right, varying along Y. | `wavelength` in source pixels (optional), `intensity`, `edge_taper`, `shift_X`, `shift_Y` |
+| `vertical_wave` | Moves pixels up and down, varying along X. | `wavelength` in source pixels (optional), `intensity`, `edge_taper`, `shift_X`, `shift_Y` |
+| `gentle_pinch` | Moves pixels toward the page center. | `intensity`, `edge_taper`, `shift_X`, `shift_Y` |
+| `sine_lens` | Makes a repeated geometric lens field. | lens counts, gains, frequencies, phases, `intensity`, `edge_taper`, `shift_X`, `shift_Y` |
 | `refractive_index` | Samples two optical views through a uniform slab. | thickness, indices, direction, page size, polarization |
-| `custom` | Uses a Python coordinate function, including `custom_wave`. | function, `intensity`; callback-specific `wavelength` and `fixed_axis` |
+| `custom` | Uses a Python coordinate function, including `custom_wave`. | function, `intensity`, `shift_X`, `shift_Y`; callback-specific `wavelength`, `fixed_axis`, `edge_taper` |
 
 The CLI uses droplets if you omit `--page-warp`. The CLI cannot take a Python custom function.
 

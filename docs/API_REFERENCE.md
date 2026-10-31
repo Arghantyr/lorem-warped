@@ -18,6 +18,9 @@ WarpTransform(
     mode="droplet",
     intensity=None,
     wavelength=None,
+    edge_taper=True,
+    shift_X=0.0,
+    shift_Y=0.0,
     config=DistortionConfig(),
     lens_options={},
     refraction_options={},
@@ -32,6 +35,8 @@ WarpTransform(
 | `mode` | Selects `droplet`, one page mode, `refractive_index`, or `custom`. |
 | `intensity` | Sets geometric displacement in pixels. `None` uses the mode default. |
 | `wavelength` | Positive, finite source-pixel period for `horizontal_wave` or `vertical_wave` only. `None` retains the original page-relative wave. |
+| `edge_taper` | Boolean, default `True`. Tapers built-in geometric page warps at the image boundary. `False` removes the page-edge envelope. A nonzero shift overrides `True` and disables tapering. On a custom callback, `False` requires that the callback accept `edge_taper`. |
+| `shift_X`, `shift_Y` | Finite pixel translations, default `0.0`. Positive X moves right; positive Y moves down. Applied after multiplying the wave field by intensity, so shifts still work with zero intensity. Any nonzero shift disables tapering for built-in page warps and `custom_wave`. Not available for droplets or physical refraction. |
 | `config` | Supplies the settings for `droplet`. |
 | `lens_options` | Supplies keyword arguments to `sine_lens`. Use only with `sine_lens`. |
 | `refraction_options` | Supplies keyword arguments to `refract_image`. Use only with `refractive_index`. |
@@ -104,9 +109,11 @@ The cosine field has magnitude `1 + cos(2π × distance / radius)` inside each r
 
 This function evaluates a coordinate function at every output pixel. It returns an `(H, W, 2)` field. The coordinate function receives normalized `(y, x)` image coordinates.
 
-### `warp_page(image, warp_function, intensity=3.0)`
+### `warp_page(image, warp_function, intensity=3.0, mask=None, *, shift_X=0.0, shift_Y=0.0)`
 
 This function makes a page field and applies it to the image. Its intensity is nonnegative and finite. The field components set the direction; intensity sets the displacement scale in pixels.
+
+For supported page functions, a nonzero pixel shift overrides an explicitly bound `edge_taper=True`: the wave envelope is disabled before the constant translation is added. A mask, if supplied, scales both the warp and the translation. An arbitrary custom callback without an `edge_taper` argument retains its own field shape.
 
 ### `warp_image(image, field, intensity)`
 
@@ -120,12 +127,12 @@ This lower-level function applies a field with backward bilinear sampling. It mu
 
 | Name | Field direction |
 | --- | --- |
-| `horizontal_wave(y, x, wavelength=None)` | Moves image content left or right; period varies along Y. |
-| `vertical_wave(y, x, wavelength=None)` | Moves image content up or down; period varies along X. |
-| `gentle_pinch(y, x)` | Moves image content toward the page center. |
-| `sine_lens(y, x, ...)` | Makes a repeated geometric lens field. |
+| `horizontal_wave(y, x, wavelength=None, *, edge_taper=True)` | Moves image content left or right; period varies along Y. |
+| `vertical_wave(y, x, wavelength=None, *, edge_taper=True)` | Moves image content up or down; period varies along X. |
+| `gentle_pinch(y, x, *, edge_taper=True)` | Moves image content toward the page center. |
+| `sine_lens(y, x, ..., edge_taper=True)` | Makes a repeated geometric lens field. |
 
-The built-in functions return `(dy, dx)` tensors. A page envelope keeps the field at zero on the page edges for the simple wave and pinch modes.
+The built-in functions return `(dy, dx)` tensors. With `edge_taper=True` and no shifts, waves have exactly zero displacement on every boundary pixel. Use `edge_taper=False` to remove their page-edge envelope. These coordinate functions return unit fields; pixel-valued shifts belong to `warp_page` or `WarpTransform`, not the coordinate-function arguments.
 
 For the built-in waves, `wavelength` is a positive, finite number of **source-image pixels**, not a cycle count or fraction of the page. Omitting it preserves the legacy three-cycle horizontal or two-cycle vertical wave across the whole image. Pass a period to `WarpTransform`, or bind it when calling `warp_page` or `page_warp_field` directly:
 
@@ -137,11 +144,13 @@ from src import horizontal_wave, vertical_wave, warp_page
 image = torch.rand(3, 256, 256)
 horizontal = warp_page(image, partial(horizontal_wave, wavelength=28), intensity=20)
 vertical = warp_page(image, partial(vertical_wave, wavelength=28), intensity=20)
+shifted = warp_page(image, partial(horizontal_wave, wavelength=28, edge_taper=True),
+                    intensity=20, shift_X=18, shift_Y=12)  # disables taper
 ```
 
-### `custom_wave(y, x, *, wavelength, fixed_axis="vertical")`
+### `custom_wave(y, x, *, wavelength, fixed_axis="vertical", edge_taper=True)`
 
-This Python-only coordinate function combines horizontal and vertical waves and returns `(dy, dx)`. The period is a positive, finite source-pixel value; both components have a page-edge taper. `fixed_axis="vertical"` holds the vertical-wave period at 25% of image width (along X) and applies `wavelength` to the horizontal wave (along Y). `fixed_axis="horizontal"` holds the horizontal-wave period at 25% of image height (along Y) and applies `wavelength` to the vertical wave (along X). `fixed_axis="symmetric"` uses `wavelength` on both X and Y, with no fixed quarter-page period.
+This Python-only coordinate function combines horizontal and vertical waves and returns `(dy, dx)`. The period is a positive, finite source-pixel value; both components have a page-edge taper by default, which `edge_taper=False` disables. `fixed_axis="vertical"` holds the vertical-wave period at 25% of image width (along X) and applies `wavelength` to the horizontal wave (along Y). `fixed_axis="horizontal"` holds the horizontal-wave period at 25% of image height (along Y) and applies `wavelength` to the vertical wave (along X). `fixed_axis="symmetric"` uses `wavelength` on both X and Y, with no fixed quarter-page period.
 
 ```python
 from functools import partial
@@ -162,6 +171,7 @@ sine_lens(
     phase_x=0.0, phase_y=0.0,
     *, amplitude_x=1.0, amplitude_y=1.0,
     frequency_x=None, frequency_y=None,
+    edge_taper=True,
 )
 ```
 
@@ -169,7 +179,7 @@ sine_lens(
 
 Each axis amplitude is a signed field gain. Zero turns off that field component. Phase is a fraction of a full cycle. A phase value of `0.25` is a quarter-cycle shift. `sine_lens` keeps the old zero-phase, integer-frequency field shape.
 
-A nonzero phase or a fractional frequency adds a page-edge taper. Intensity is not a `sine_lens` argument. Pass it to `warp_page` or `WarpTransform`.
+A nonzero phase or a fractional frequency adds a page-edge taper by default. `edge_taper=False` disables this extra envelope; the underlying lens cell envelope remains. Intensity is not a `sine_lens` argument. Pass it to `warp_page` or `WarpTransform`.
 
 ### `overlay_warped_grid(image, field=None, intensity=0.0, spacing=40, opacity=0.45)`
 
