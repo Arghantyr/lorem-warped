@@ -50,15 +50,55 @@ def _page_envelope(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """Pin all four page edges while allowing a smooth interior deformation."""
     return torch.sin(math.pi * y) * torch.sin(math.pi * x)
 
-def horizontal_wave(y: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Gently move text left/right in three broad waves down the page."""
-    envelope = _page_envelope(y, x)
-    return torch.zeros_like(y), envelope * torch.sin(6 * math.pi * y)
+def _wave_phase(coordinate: torch.Tensor, pixels: int, wavelength: float | None,
+                legacy_cycles: int) -> torch.Tensor:
+    if wavelength is None:
+        return torch.sin(2 * math.pi * legacy_cycles * coordinate)
+    if (isinstance(wavelength, bool) or not isinstance(wavelength, (int, float))
+            or not math.isfinite(wavelength) or wavelength <= 0):
+        raise ValueError("wavelength must be a finite positive number of pixels")
+    # Normalized coordinates include both edge pixels: their span is pixels - 1.
+    return torch.sin(2 * math.pi * (coordinate - 0.5) * (pixels - 1) / wavelength)
 
-def vertical_wave(y: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Gently bow baselines up/down over two broad waves across the page."""
+def horizontal_wave(y: torch.Tensor, x: torch.Tensor,
+                    wavelength: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """Move content left/right; wavelength is the vertical period in pixels.
+
+    Omit wavelength for the legacy three-cycle page-wide wave.
+    """
     envelope = _page_envelope(y, x)
-    return envelope * torch.sin(4 * math.pi * x), torch.zeros_like(x)
+    return torch.zeros_like(y), envelope * _wave_phase(y, y.shape[0], wavelength, 3)
+
+def vertical_wave(y: torch.Tensor, x: torch.Tensor,
+                  wavelength: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """Move content up/down; wavelength is the horizontal period in pixels.
+
+    Omit wavelength for the legacy two-cycle page-wide wave.
+    """
+    envelope = _page_envelope(y, x)
+    return envelope * _wave_phase(x, x.shape[1], wavelength, 2), torch.zeros_like(x)
+
+def custom_wave(y: torch.Tensor, x: torch.Tensor, *, wavelength: float,
+                fixed_axis: str = "vertical") -> tuple[torch.Tensor, torch.Tensor]:
+    """Combine two waves: one fixed at 25% of its axis, one user-periodic.
+
+    ``fixed_axis='vertical'`` fixes the vertical-wave period to 25% of image
+    width (X); the horizontal-wave period is ``wavelength`` pixels (Y).
+    ``fixed_axis='horizontal'`` fixes the horizontal wave at 25% of image
+    height (Y) and uses ``wavelength`` pixels for the vertical wave (X).
+    ``fixed_axis='symmetric'`` applies the same pixel wavelength to both
+    components (no quarter-page period). Both components are tapered at the
+    edges and share the caller's intensity.
+    """
+    if fixed_axis not in ("vertical", "horizontal", "symmetric"):
+        raise ValueError("fixed_axis must be 'vertical', 'horizontal', or 'symmetric'")
+    fixed_x = x.shape[1] * 0.25
+    fixed_y = y.shape[0] * 0.25
+    vertical_period = fixed_x if fixed_axis == "vertical" else wavelength
+    horizontal_period = fixed_y if fixed_axis == "horizontal" else wavelength
+    envelope = _page_envelope(y, x)
+    return (envelope * _wave_phase(x, x.shape[1], vertical_period, 2),
+            envelope * _wave_phase(y, y.shape[0], horizontal_period, 3))
 
 def gentle_pinch(y: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Low-strength radial compression toward the page centre, tapered at edges."""

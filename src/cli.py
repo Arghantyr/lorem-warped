@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--radius", type=float, default=defaults.radius)
     parser.add_argument("--intensity", type=float, default=None,
                         help="Pixel warp multiplier for geometric modes only.")
+    parser.add_argument("--wavelength", type=float, metavar="PIXELS",
+                        help="Wave period along the varying axis in pixels; horizontal/vertical waves only.")
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument("--profile", choices=("cosine", "parabolic"), default=defaults.profile)
     parser.add_argument("--page-warp", choices=(*PAGE_WARPS, "refractive_index"),
@@ -95,6 +97,11 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.page_warp and args.nonoverlapping_page:
         parser.error("--page-warp and --nonoverlapping-page cannot be combined")
+    if args.wavelength is not None:
+        if args.page_warp not in ("horizontal_wave", "vertical_wave"):
+            parser.error("--wavelength requires --page-warp horizontal_wave or vertical_wave")
+        if not math.isfinite(args.wavelength) or args.wavelength <= 0:
+            parser.error("--wavelength must be finite and positive")
     if args.page_warp != "sine_lens" and any(value is not None for value in
             (args.lens_a, args.lens_b, args.lens_phase_x, args.lens_phase_y,
              args.lens_amplitude_x, args.lens_amplitude_y,
@@ -177,6 +184,8 @@ def main(argv: list[str] | None = None) -> None:
                             amplitude_y=1.0 if args.lens_amplitude_y is None else args.lens_amplitude_y,
                             frequency_x=args.lens_frequency_x, frequency_y=args.lens_frequency_y)
                         if args.page_warp == "sine_lens" else PAGE_WARPS[args.page_warp])
+            if args.wavelength is not None:
+                function = partial(function, wavelength=args.wavelength)
             field = page_warp_field(source, function)
             if mask is not None:
                 field = field * mask.unsqueeze(-1)
