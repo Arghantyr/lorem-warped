@@ -17,13 +17,14 @@ if __package__:
 else:
     from optics_schematic import build_schematic
 
-from lorem_warped import (
+from src import (
     CentreDistribution, DistortionConfig, PAGE_WARPS, WarpTransform,
-    displacement_field, image_to_tensor, make_centres, overlay_warped_grid,
+    custom_wave, displacement_field, image_to_tensor, make_centres, overlay_warped_grid,
     page_warp_field, refract_image, refractive_index_field, sine_lens,
 )
 
 PARAGRAPH = ("Lorem ipsum", "dolor sit amet", "consectetur", "adipiscing elit")
+FONT_PX = 28
 MODES = ("droplet", "sine_lens", "refractive_index", "horizontal_wave",
          "vertical_wave", "gentle_pinch", "custom")
 LABELS = {"droplet": "Droplet", "sine_lens": "Sine lens",
@@ -32,7 +33,7 @@ LABELS = {"droplet": "Droplet", "sine_lens": "Sine lens",
           "gentle_pinch": "Gentle pinch", "custom": "Custom wave"}
 
 
-def source_paragraph(font_px: int = 28) -> Image.Image:
+def source_paragraph(font_px: int = FONT_PX) -> Image.Image:
     """Use the same four-line excerpt for every demonstrated transformation."""
     image = Image.new("RGB", (300, 184), "white")
     draw = ImageDraw.Draw(image)
@@ -48,21 +49,13 @@ def pixels(tensor: torch.Tensor) -> Image.Image:
     return Image.fromarray(data, "RGB")
 
 
-def custom_function(cycles_x: float = 2, cycles_y: float = 2):
-    """Independent X/Y wave counts with a common edge taper (dy, dx)."""
+def custom_function(wavelength_x: float, wavelength_y: float, width: int, height: int):
+    """Independent pixel periods along X/Y with a common edge taper (dy, dx)."""
     def field(y: torch.Tensor, x: torch.Tensor):
         envelope = torch.sin(math.pi * y) * torch.sin(math.pi * x)
-        return (envelope * torch.sin(2 * math.pi * cycles_x * x),
-                envelope * torch.sin(2 * math.pi * cycles_y * y))
+        return (envelope * torch.sin(2 * math.pi * x * (width - 1) / wavelength_x),
+                envelope * torch.sin(2 * math.pi * y * (height - 1) / wavelength_y))
     return field
-
-
-def variable_wave(y: torch.Tensor, x: torch.Tensor, *, cycles: float,
-                  axis: str) -> tuple[torch.Tensor, torch.Tensor]:
-    envelope = torch.sin(math.pi * y) * torch.sin(math.pi * x)
-    if axis == "horizontal":
-        return torch.zeros_like(y), envelope * torch.sin(2 * math.pi * cycles * y)
-    return envelope * torch.sin(2 * math.pi * cycles * x), torch.zeros_like(x)
 
 
 def variable_pinch(y: torch.Tensor, x: torch.Tensor, *, envelope_power: float):
@@ -74,10 +67,10 @@ def variable_pinch(y: torch.Tensor, x: torch.Tensor, *, envelope_power: float):
 def render(mode: str, image: Image.Image, *, intensity: float | None = None,
            radius: float = 28, count: int = 8, distribution: str = "square",
            frequency_x: float = 1.5, thickness_mm: float = 5,
-           polarization_deg: float = 30, cycles_x: float = 2,
-           cycles_y: float = 2,
+           polarization_deg: float = 30, wavelength_x: float = 28,
+           wavelength_y: float = 28,
            n_x: float = 1.3, n_y: float = 2.5,
-           wave_cycles: float | None = None,
+           wave_wavelength: float | None = None,
            pinch_power: float | None = None) -> tuple[torch.Tensor, list[torch.Tensor]]:
     """Return the actual transformed tensor and its actual pixel displacement field(s)."""
     tensor = image_to_tensor(image)
@@ -108,12 +101,12 @@ def render(mode: str, image: Image.Image, *, intensity: float | None = None,
         function = partial(sine_lens, **options)
         transform = WarpTransform(mode=mode, intensity=strength, lens_options=options)
     elif mode == "custom":
-        function = custom_function(cycles_x, cycles_y)
+        function = custom_function(wavelength_x, wavelength_y, image.width, image.height)
         transform = WarpTransform(mode=mode, intensity=strength, warp_function=function)
-    elif mode in ("horizontal_wave", "vertical_wave") and wave_cycles is not None:
-        axis = "horizontal" if mode == "horizontal_wave" else "vertical"
-        function = partial(variable_wave, cycles=wave_cycles, axis=axis)
-        transform = WarpTransform(mode="custom", intensity=strength, warp_function=function)
+    elif mode in ("horizontal_wave", "vertical_wave"):
+        period = 28 if wave_wavelength is None else wave_wavelength
+        function = partial(PAGE_WARPS[mode], wavelength=period)
+        transform = WarpTransform(mode=mode, intensity=strength, wavelength=period)
     elif mode == "gentle_pinch" and pinch_power is not None:
         function = partial(variable_pinch, envelope_power=pinch_power)
         transform = WarpTransform(mode="custom", intensity=strength, warp_function=function)
@@ -136,12 +129,23 @@ def function_plot(fields: list[torch.Tensor], dest: Path) -> None:
     color = np.stack((255 - 57 * heat, 255 - 21 * heat, 255 - 8 * heat), axis=-1).astype("uint8")
     image = Image.fromarray(color, "RGB")
     draw = ImageDraw.Draw(image)
-    for x in range(14, width, 28):
+    # A wavelength can put every 28 px sample on a zero of the wave.
+    # Use a noncommensurate grid in that case so arrows reveal both the
+    # magnitude and the changing direction of the actual pixel field.
+    spacing, origin = 28, 14
+    samples = [(y, x) for y in range(origin, height, spacing)
+               for x in range(origin, width, spacing)]
+    if samples and not any(
+        math.hypot(float(field[y, x, 0]), float(field[y, x, 1])) >= 0.05
+        for field in components for y, x in samples
+    ):
+        spacing, origin = 24, 12
+    for x in range(origin, width, spacing):
         draw.line((x, 0, x, height), fill="#b1c3cf", width=1)
-    for y in range(14, height, 28):
+    for y in range(origin, height, spacing):
         draw.line((0, y, width, y), fill="#b1c3cf", width=1)
-    for y in range(14, height, 28):
-        for x in range(14, width, 28):
+    for y in range(origin, height, spacing):
+        for x in range(origin, width, spacing):
             for index, field in enumerate(components):
                 dy, dx = field[y, x]
                 length = math.hypot(float(dy), float(dx))
@@ -225,6 +229,7 @@ def build_atlas(images: Path, generated: Path) -> dict:
         else:
             grid = overlay_warped_grid(result, fields[0], 1, spacing=28, opacity=0.24)
         pixels(grid).save(reference)
+        wavelengths = tuple(FONT_PX * percent / 100 for percent in (50, 100, 150, 200))
         if mode == "droplet":
             rows, cols, axes = (30, 45, 60, 75), (0, 1, 3, 5), ("radius (px)", "intensity (px)")
         elif mode == "sine_lens":
@@ -234,11 +239,11 @@ def build_atlas(images: Path, generated: Path) -> dict:
         elif mode == "gentle_pinch":
             rows, cols, axes = (0.6, 1, 1.5, 2), (0, 90, 180, 300), ("pinch envelope power", "intensity (px)")
         elif mode == "custom":
-            rows, cols, axes = (1, 2, 3, 4), (1, 2, 3, 4), ("X cycles", "Y cycles")
+            rows, cols, axes = wavelengths, wavelengths, ("X wavelength (px)", "Y wavelength (px)")
         elif mode == "horizontal_wave":
-            rows, cols, axes = (2, 3, 4, 5), (0, 12, 28, 50), ("horizontal wave cycles", "intensity (px)")
+            rows, cols, axes = wavelengths, (0, 12, 28, 50), ("Y wavelength (px)", "intensity (px)")
         else:
-            rows, cols, axes = (1, 2, 3, 4), (0, 12, 28, 50), ("vertical wave cycles", "intensity (px)")
+            rows, cols, axes = wavelengths, (0, 12, 28, 50), ("X wavelength (px)", "intensity (px)")
         studies = []
         study_values = ((2, 5, 10) if mode == "refractive_index" else
                         (5, 10, 20) if mode == "custom" else (None,))
@@ -250,10 +255,10 @@ def build_atlas(images: Path, generated: Path) -> dict:
                             {"frequency_x": first, "intensity": second} if mode == "sine_lens" else
                             {"thickness_mm": setting, "polarization_deg": 45,
                              "n_x": first, "n_y": second} if mode == "refractive_index" else
-                            {"cycles_x": first, "cycles_y": second,
+                            {"wavelength_x": first, "wavelength_y": second,
                              "intensity": setting} if mode == "custom" else
                             {"pinch_power": first, "intensity": second} if mode == "gentle_pinch" else
-                            {"wave_cycles": first, "intensity": second})
+                            {"wave_wavelength": first, "intensity": second})
                     suffix = (f"_{setting}mm" if mode == "refractive_index" else
                               f"_{setting}px" if mode == "custom" else "")
                     path = generated / f"study_{mode}{suffix}_{row}_{column}.png"
@@ -275,8 +280,11 @@ def build_atlas(images: Path, generated: Path) -> dict:
                         gridded, _ = render(mode, pixels(straight), **opts)
                         shown = pixels(gridded)
                     shown.save(path)
+                    label = (f"{first:g} px | {second:g} px" if mode in
+                             ("custom", "horizontal_wave", "vertical_wave") else
+                             f"{first:g} | {second:g}")
                     study_panels.append({"row": row, "column": column, "first": first,
-                                         "second": second, "label": f"{first:g} | {second:g}",
+                                         "second": second, "label": label,
                                          "path": str(path), "role": "original" if zero_warp else "warped",
                                          **({"guide": "straight_square_grid" if zero_warp else
                                             "warped_square_grid"} if mode != "droplet" else
@@ -303,10 +311,10 @@ def build_atlas(images: Path, generated: Path) -> dict:
                                     "droplet": "square; 8 centres; radius 28 px; intensity 2.5 px",
                                     "sine_lens": "X/Y frequency 1.5/1.5; intensity 80 px",
                                     "refractive_index": "thickness 5 mm; polarization 30 degrees",
-                                    "horizontal_wave": "intensity 8 px",
-                                    "vertical_wave": "intensity 10 px",
+                                    "horizontal_wave": "Y wavelength 28 px; intensity 8 px",
+                                    "vertical_wave": "X wavelength 28 px; intensity 10 px",
                                     "gentle_pinch": "intensity 150 px",
-                                    "custom": "X/Y cycles 2/2; intensity 8 px",
+                                    "custom": "X/Y wavelength 28/28 px; intensity 8 px",
                                 }[mode]}
         if mode == "refractive_index":
             data["modes"][mode]["schematic"] = build_schematic(
