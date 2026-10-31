@@ -38,6 +38,9 @@ class WarpTransform:
     mode: str = "droplet"
     intensity: float | None = None
     wavelength: float | None = None
+    edge_taper: bool = True
+    shift_X: float = 0.0
+    shift_Y: float = 0.0
     config: DistortionConfig = field(default_factory=DistortionConfig)
     lens_options: dict = field(default_factory=dict)
     refraction_options: dict = field(default_factory=dict)
@@ -59,6 +62,13 @@ class WarpTransform:
             if (isinstance(self.wavelength, bool) or not isinstance(self.wavelength, (int, float))
                     or not math.isfinite(self.wavelength) or self.wavelength <= 0):
                 raise ValueError("wavelength must be a finite positive number of pixels")
+        if not isinstance(self.edge_taper, bool):
+            raise ValueError("edge_taper must be a boolean")
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+               for v in (self.shift_X, self.shift_Y)):
+            raise ValueError("shift_X and shift_Y must be finite pixel values")
+        if self.mode in ("droplet", "refractive_index") and (not self.edge_taper or self.shift_X or self.shift_Y):
+            raise ValueError("edge_taper and shift require a page warp mode")
         if self.lens_options and self.mode != "sine_lens":
             raise ValueError("lens_options require sine_lens mode")
         if self.refraction_options and self.mode != "refractive_index":
@@ -79,7 +89,10 @@ class WarpTransform:
             function = partial(sine_lens, **self.lens_options)
         elif self.wavelength is not None:
             function = partial(function, wavelength=self.wavelength)
-        return warp_page(image, function, 3.0 if self.intensity is None else self.intensity, mask=self.mask)
+        if self.mode != "custom" or not self.edge_taper:
+            function = partial(function, edge_taper=self.edge_taper)
+        return warp_page(image, function, 3.0 if self.intensity is None else self.intensity,
+                         mask=self.mask, shift_X=self.shift_X, shift_Y=self.shift_Y)
 
 
 __all__ = [

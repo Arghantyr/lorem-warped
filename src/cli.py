@@ -15,6 +15,7 @@ from .core import (
     refract_image, page_warp_field, warp_image, overlay_warped_grid,
     make_nonoverlapping_centres, distort_image,
 )
+from .page import shifted_page_field
 from .tensor import load_mask
 
 
@@ -51,6 +52,12 @@ def main(argv: list[str] | None = None) -> None:
                         help="Pixel warp multiplier for geometric modes only.")
     parser.add_argument("--wavelength", type=float, metavar="PIXELS",
                         help="Wave period along the varying axis in pixels; horizontal/vertical waves only.")
+    parser.add_argument("--edge-taper", action=argparse.BooleanOptionalAction, default=True,
+                        help="Pin page warp displacement to zero at the boundary (default: enabled).")
+    parser.add_argument("--shift-X", "--shift-x", dest="shift_X", type=float, default=0.0, metavar="PIXELS",
+                        help="Translate the page warp right by this many pixels.")
+    parser.add_argument("--shift-Y", "--shift-y", dest="shift_Y", type=float, default=0.0, metavar="PIXELS",
+                        help="Translate the page warp down by this many pixels.")
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument("--profile", choices=("cosine", "parabolic"), default=defaults.profile)
     parser.add_argument("--page-warp", choices=(*PAGE_WARPS, "refractive_index"),
@@ -97,6 +104,10 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.page_warp and args.nonoverlapping_page:
         parser.error("--page-warp and --nonoverlapping-page cannot be combined")
+    if not math.isfinite(args.shift_X) or not math.isfinite(args.shift_Y):
+        parser.error("--shift-X and --shift-Y must be finite pixel values")
+    if args.page_warp not in PAGE_WARPS and (not args.edge_taper or args.shift_X or args.shift_Y):
+        parser.error("--edge-taper and --shift-* require a geometric --page-warp")
     if args.wavelength is not None:
         if args.page_warp not in ("horizontal_wave", "vertical_wave"):
             parser.error("--wavelength requires --page-warp horizontal_wave or vertical_wave")
@@ -186,7 +197,11 @@ def main(argv: list[str] | None = None) -> None:
                         if args.page_warp == "sine_lens" else PAGE_WARPS[args.page_warp])
             if args.wavelength is not None:
                 function = partial(function, wavelength=args.wavelength)
+            function = partial(function, edge_taper=args.edge_taper and not (args.shift_X or args.shift_Y))
             field = page_warp_field(source, function)
+            if args.shift_X or args.shift_Y:
+                field = shifted_page_field(field, intensity, args.shift_X, args.shift_Y)
+                intensity = 1.0
             if mask is not None:
                 field = field * mask.unsqueeze(-1)
             output = warp_image(source, field, intensity)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from functools import partial
 from pathlib import Path
 import torch
 from .tensor import _as_float_chw, warp_image
@@ -33,7 +34,8 @@ def page_warp_field(image: torch.Tensor, warp_function) -> torch.Tensor:
     return field
 
 def warp_page(image: torch.Tensor, warp_function, intensity: float = 3.0,
-              mask: str | Path | torch.Tensor | None = None) -> torch.Tensor:
+              mask: str | Path | torch.Tensor | None = None, *,
+              shift_X: float = 0.0, shift_Y: float = 0.0) -> torch.Tensor:
     """Warp the entire page with a coordinate function and pixel amplitude.
 
     Positive dy/dx move visible content down/right (backward bilinear sampling).
@@ -42,13 +44,34 @@ def warp_page(image: torch.Tensor, warp_function, intensity: float = 3.0,
     """
     if not math.isfinite(intensity) or intensity < 0:
         raise ValueError("intensity must be finite and non-negative")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+           for v in (shift_X, shift_Y)):
+        raise ValueError("shift_X and shift_Y must be finite pixel values")
     image = _as_float_chw(image)
+    if shift_X or shift_Y:
+        base_function = warp_function
+        while isinstance(base_function, partial):
+            base_function = base_function.func
+        if base_function in (*PAGE_WARPS.values(), custom_wave):
+            warp_function = partial(warp_function, edge_taper=False)
     field = page_warp_field(image, warp_function)
+    if shift_X or shift_Y:
+        return warp_image(image, shifted_page_field(field, intensity, shift_X, shift_Y), 1.0, mask=mask)
     return warp_image(image, field, intensity, mask=mask)
+
+def shifted_page_field(field: torch.Tensor, intensity: float, shift_X: float = 0.0,
+                       shift_Y: float = 0.0) -> torch.Tensor:
+    """Apply a global (X, Y) translation to an absolute-pixel displacement field."""
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+           for v in (shift_X, shift_Y)):
+        raise ValueError("shift_X and shift_Y must be finite pixel values")
+    return field * intensity + field.new_tensor((shift_Y, shift_X))
 
 def _page_envelope(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """Pin all four page edges while allowing a smooth interior deformation."""
-    return torch.sin(math.pi * y) * torch.sin(math.pi * x)
+    envelope = torch.sin(math.pi * y) * torch.sin(math.pi * x)
+    return torch.where((y == 0) | (y == 1) | (x == 0) | (x == 1),
+                       torch.zeros_like(envelope), envelope)
 
 def _wave_phase(coordinate: torch.Tensor, pixels: int, wavelength: float | None,
                 legacy_cycles: int) -> torch.Tensor:
@@ -61,25 +84,27 @@ def _wave_phase(coordinate: torch.Tensor, pixels: int, wavelength: float | None,
     return torch.sin(2 * math.pi * (coordinate - 0.5) * (pixels - 1) / wavelength)
 
 def horizontal_wave(y: torch.Tensor, x: torch.Tensor,
-                    wavelength: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+                    wavelength: float | None = None, *,
+                    edge_taper: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
     """Move content left/right; wavelength is the vertical period in pixels.
 
     Omit wavelength for the legacy three-cycle page-wide wave.
     """
-    envelope = _page_envelope(y, x)
+    envelope = _page_envelope(y, x) if edge_taper else 1.0
     return torch.zeros_like(y), envelope * _wave_phase(y, y.shape[0], wavelength, 3)
 
 def vertical_wave(y: torch.Tensor, x: torch.Tensor,
-                  wavelength: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+                  wavelength: float | None = None, *,
+                  edge_taper: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
     """Move content up/down; wavelength is the horizontal period in pixels.
 
     Omit wavelength for the legacy two-cycle page-wide wave.
     """
-    envelope = _page_envelope(y, x)
+    envelope = _page_envelope(y, x) if edge_taper else 1.0
     return envelope * _wave_phase(x, x.shape[1], wavelength, 2), torch.zeros_like(x)
 
 def custom_wave(y: torch.Tensor, x: torch.Tensor, *, wavelength: float,
-                fixed_axis: str = "vertical") -> tuple[torch.Tensor, torch.Tensor]:
+                fixed_axis: str = "vertical", edge_taper: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
     """Combine two waves: one fixed at 25% of its axis, one user-periodic.
 
     ``fixed_axis='vertical'`` fixes the vertical-wave period to 25% of image
@@ -96,13 +121,14 @@ def custom_wave(y: torch.Tensor, x: torch.Tensor, *, wavelength: float,
     fixed_y = y.shape[0] * 0.25
     vertical_period = fixed_x if fixed_axis == "vertical" else wavelength
     horizontal_period = fixed_y if fixed_axis == "horizontal" else wavelength
-    envelope = _page_envelope(y, x)
+    envelope = _page_envelope(y, x) if edge_taper else 1.0
     return (envelope * _wave_phase(x, x.shape[1], vertical_period, 2),
             envelope * _wave_phase(y, y.shape[0], horizontal_period, 3))
 
-def gentle_pinch(y: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def gentle_pinch(y: torch.Tensor, x: torch.Tensor, *,
+                 edge_taper: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
     """Low-strength radial compression toward the page centre, tapered at edges."""
-    envelope = _page_envelope(y, x)
+    envelope = _page_envelope(y, x) if edge_taper else 1.0
     return envelope * (0.5 - y), envelope * (0.5 - x)
 
 def sine_lens(
@@ -110,6 +136,7 @@ def sine_lens(
     phase_x: float = 0.0, phase_y: float = 0.0,
     *, amplitude_x: float = 1.0, amplitude_y: float = 1.0,
     frequency_x: float | None = None, frequency_y: float | None = None,
+    edge_taper: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Whole-page sinusoidal lens with independent X/Y gain and frequency.
 
@@ -133,7 +160,7 @@ def sine_lens(
     phase_x, phase_y = phase_x % 1, phase_y % 1
     cell_x, cell_y = frequency_x * x + 2 * phase_x, frequency_y * y + 2 * phase_y
     envelope = torch.sin(math.pi * cell_x) * torch.sin(math.pi * cell_y)
-    if phase_x or phase_y or not float(frequency_x).is_integer() or not float(frequency_y).is_integer():
+    if edge_taper and (phase_x or phase_y or not float(frequency_x).is_integer() or not float(frequency_y).is_integer()):
         envelope = envelope * _page_envelope(y, x)
     return (amplitude_y * envelope * (0.5 - torch.remainder(cell_y, 1)),
             amplitude_x * envelope * (0.5 - torch.remainder(cell_x, 1)))
