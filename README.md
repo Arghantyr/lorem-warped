@@ -104,6 +104,32 @@ result = WarpTransform(mode="sine_lens", intensity=32,
 
 Masking also works with droplet and refractive-index modes, and with the `mask` argument to `warp_image`, `warp_page`, `distort_image`, and `refract_image`. In refraction, the two displacement fields are masked separately; a black mask does not remove the model's transmission/brightness effect. Invalid values or dimensions raise an error rather than resizing the mask. Omit the mask for an unmasked warp.
 
+## Logical image masks
+
+`ImageTransform` applies a pixelwise logical `and`, `or`, or `xor` to an image and a same-size **binary** mask, rather than masking the warp's displacement. White mask pixels are `1`, black pixels are `0`. XOR flips black and white where the mask is white; AND keeps white pixels only where both image and mask are white; OR makes pixels white where either is white.
+
+```python
+import torch
+from src import ImageTransform, WarpTransform
+
+mask = torch.zeros(image.shape[1:], dtype=torch.bool)  # H×W, black by default
+mask[:, image.shape[2] // 2:] = True  # invert the right half
+result = ImageTransform(operation="xor", mask=mask)(image)
+warped = WarpTransform(mode="horizontal_wave", intensity=20)(image)
+result = ImageTransform.logical_xor(warped, mask)  # image or transformed image first, mask second
+```
+
+The callable also accepts a path to a binary mask image. Inputs are CHW tensors (float `[0, 1]`, 8-bit integer, or bool); image values at least `0.5` are treated as white, so gray anti-aliased/warped pixels become black or white. Results are new float CHW tensors with values `0` or `1`. Gray masks are rejected; logical operations are not differentiable. This is a Python API feature, not a CLI `--mask` option.
+
+To see XOR on text, generate ten checkerboards with square sides geometrically spaced from 4× to ¼× the original page's nominal 28px body font height (112, 82, 60, 44, 33, 24, 18, 13, 10, 7px):
+
+```bash
+python -m src.checkerboard_samples --input original.png \
+  --crop 70 104 590 564 --output-dir examples/checkerboard-xor
+```
+
+The [contact sheet](examples/checkerboard-xor/contact_sheet.png) compares the source, binary mask, and XOR result at every size; `manifest.json` lists the ten full-resolution mask/result pairs. Use `--font-height-px` and `--crop` for a different known-font image, or omit `--crop` to use the full image.
+
 ## Transformations and their extent
 
 The animations are cropped from `lorem-warped-motion-v7.mp4` to show only its white image panel. They illustrate the visual behavior, not the exact parameters of the commands above. Geometric `--intensity` is a nonnegative pixel-displacement scale, not a brightness setting or a fixed maximum; high values can make text unreadable.
@@ -116,3 +142,11 @@ The animations are cropped from `lorem-warped-motion-v7.mp4` to show only its wh
 | **Custom wave (Python only)** — use `custom_wave(y, x, wavelength=28, fixed_axis="vertical")` as the `warp_function` in `WarpTransform(mode="custom", intensity=20, ...)`. The fixed variants use 25% of image width/height for one period; symmetric uses the chosen period on both axes. No custom-function CLI flag exists.<br><img src="docs/readme-gifs/custom-wave.gif" alt="Custom wave applied to text" width="210"> | For the three built-in page modes at right, use `--page-warp horizontal_wave`, `vertical_wave`, or `gentle_pinch` and a nonnegative `--intensity`. |
 
 For the physical slab, try `python -m src --input original.png --output slab.png --page-warp refractive_index --refraction-thickness-mm 5 --refraction-n-x 1.3 --refraction-n-y 2.5`. For more settings and illustrated strength comparisons, see the [operator manual](docs/lorem-warped-manual.pdf).
+
+## Image Transform
+
+The `ImageTransform` class operates on image pixels. It does not move pixels like `WarpTransform`, and its binary mask is different from the displacement mask described above. Select `and`, `or`, or `xor` in Python; the [Python API reference](docs/API_REFERENCE.md) describes all three.
+
+### XOR
+
+White squares invert the source's black-and-white pixels; black squares leave them unchanged. `ImageTransform.logical_xor(image, mask)` accepts a CHW image tensor (including a `WarpTransform` result) and a same-size H×W binary mask tensor or mask-file path. Gray image pixels are thresholded at 0.5, so the result is binary. For the nominal 28px body font, the PDF's illustrated checkerboards are examples 02–07: 82, 60, 44, 33, 24, and 18px squares. The [operator manual](docs/lorem-warped-manual.pdf) pairs each saved mask with its actual XOR result. Regenerate all ten examples with the command in “Logical image masks” above.
