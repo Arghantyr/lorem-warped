@@ -14,6 +14,7 @@ from typing import Callable
 import torch
 
 from .dataset_generator import generate_dataset
+from .tensor import load_mask, _as_float_chw
 from .core import (
     CentreDistribution, DistortionConfig, PAGE_WARPS, displacement_field,
     distort_image, gentle_pinch, horizontal_wave, custom_wave, image_to_tensor,
@@ -95,8 +96,54 @@ class WarpTransform:
                          mask=self.mask, shift_X=self.shift_X, shift_Y=self.shift_Y)
 
 
+@dataclass(frozen=True)
+class ImageTransform:
+    """Apply a pixelwise binary operation to a CHW image and an HW mask."""
+
+    operation: str
+    mask: str | Path | torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.operation not in ("and", "or", "xor"):
+            raise ValueError(f"unsupported image operation: {self.operation}")
+
+    def __call__(self, image: torch.Tensor) -> torch.Tensor:
+        if self.operation == "and":
+            return self.logical_and(image, self.mask)
+        if self.operation == "or":
+            return self.logical_or(image, self.mask)
+        if self.operation == "xor":
+            return self.logical_xor(image, self.mask)
+        raise ValueError(f"unsupported image operation: {self.operation}")
+
+    @classmethod
+    def logical_and(cls, image: torch.Tensor, mask: str | Path | torch.Tensor) -> torch.Tensor:
+        return cls._apply(image, mask, torch.logical_and)
+
+    @classmethod
+    def logical_or(cls, image: torch.Tensor, mask: str | Path | torch.Tensor) -> torch.Tensor:
+        return cls._apply(image, mask, torch.logical_or)
+
+    @classmethod
+    def logical_xor(cls, image: torch.Tensor, mask: str | Path | torch.Tensor) -> torch.Tensor:
+        return cls._apply(image, mask, torch.logical_xor)
+
+    @classmethod
+    def _apply(cls, image: torch.Tensor, mask: str | Path | torch.Tensor, operation: Callable) -> torch.Tensor:
+        if image.dtype == torch.bool:
+            if image.ndim != 3 or any(size == 0 for size in image.shape):
+                raise ValueError("image must have nonempty shape (channels, height, width)")
+            image = image.float()
+        else:
+            image = _as_float_chw(image)
+        binary_mask = load_mask(mask, image)
+        if not torch.all((binary_mask == 0) | (binary_mask == 1)):
+            raise ValueError("image transform mask must be binary (0 or 1)")
+        return operation(image >= 0.5, binary_mask.bool()).to(image.dtype)
+
+
 __all__ = [
-    "WarpTransform", "CentreDistribution", "DistortionConfig", "PAGE_WARPS", "generate_dataset",
+    "ImageTransform", "WarpTransform", "CentreDistribution", "DistortionConfig", "PAGE_WARPS", "generate_dataset",
     "displacement_field", "distort_image", "gentle_pinch", "horizontal_wave", "custom_wave",
     "image_to_tensor", "make_centres", "make_nonoverlapping_centres", "make_page_centres",
     "overlay_warped_grid", "page_warp_field", "parabolic_profile", "refract_image",
