@@ -250,3 +250,25 @@ The scripts `generate_page_warp_examples.py` and `generate_distortion_examples.p
 - If the CLI rejects a grid flag, select a page-warp mode.
 
 Do not use `--intensity` with the refraction mode. Change physical inputs only when they describe the real slab and page.
+
+## Image Transform
+
+Use `ImageTransform` in Python to apply a binary mask to image pixels. Unlike `WarpTransform(mask=...)`, which controls geometric displacement, this class applies `and`, `or`, or `xor` to the image values. Pass a CHW image tensor and a matching binary H×W mask tensor or path. No image-transform mode is available in the main CLI.
+
+### XOR
+
+1. Make a binary mask the same width and height as the image. A white mask square inverts black and white; a black square keeps the image unchanged.
+2. Call `ImageTransform.logical_xor(image, mask)` or construct `ImageTransform(operation="xor", mask=mask)` and call it with the image. You can use a `WarpTransform` output as the image.
+3. Save the float CHW result as a PNG. Gray image pixels are thresholded at 0.5. Gray mask pixels are rejected.
+
+```python
+from PIL import Image
+from src import ImageTransform, image_to_tensor
+
+image = image_to_tensor(Image.open("examples/checkerboard-xor/source.png"))
+mask = "examples/checkerboard-xor/mask_02_82px.png"
+result = ImageTransform.logical_xor(image, mask)
+Image.fromarray(result.mul(255).byte().permute(1, 2, 0).numpy()).save("xor.png")
+```
+
+The mask in this recipe is sized for the *cropped* 520×460 source, not the full original page. Use the matching `source.png` as shown, or regenerate a full-image mask. The [operator manual](lorem-warped-manual.pdf) displays examples 02–07 from this crop, with square sides of 82, 60, 44, 33, 24, and 18px relative to the 28px body font.

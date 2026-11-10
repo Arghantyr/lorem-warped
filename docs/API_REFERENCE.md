@@ -48,6 +48,14 @@ The refraction mode does not accept a transform intensity. It uses thickness and
 
 For example, `WarpTransform(mode="horizontal_wave", wavelength=28, intensity=20)(image)` moves text left/right, repeating every 28 source pixels along Y. Use `vertical_wave` for up/down movement repeating along X. `wavelength` is not an intensity and cannot be set on other modes, including `custom`; use a configured callback for custom waves instead.
 
+## `ImageTransform`
+
+`ImageTransform(operation="xor", mask=mask)(image)` applies a pixelwise logical operation to the image itself. The three operations are `"and"`, `"or"`, and `"xor"`; invalid names raise `ValueError` at construction. This is separate from `WarpTransform(mask=...)`, which scales a displacement field.
+
+Alternatively call the class methods `ImageTransform.logical_and(image, mask)`, `ImageTransform.logical_or(image, mask)`, and `ImageTransform.logical_xor(image, mask)`. The first argument may be a raw image or the CHW output of a `WarpTransform`; the second is a same-size binary H×W tensor or a file path to a binary mask image. A single mask is broadcast across all channels. Mask `1`/white is true; mask `0`/black is false. XOR inverts glyph and background colors under white mask pixels. Mask dimensions must match, and gray/nonbinary mask values are rejected rather than thresholded.
+
+Image inputs may be normalized float, 8-bit integer, or bool. Float pixels are clamped to `[0, 1]` and thresholded at `>= 0.5` (including anti-aliased warp results). Results are new float CHW tensors of `0` or `1` on the input device; these discrete logical operations do not preserve gradients. The CLI `--mask` option still masks geometric displacement, not image colors.
+
 ## Droplet settings
 
 ```python
@@ -237,3 +245,26 @@ The positions follow the uniform-slab modal ray calculation. The weights approxi
 Most configuration errors raise `ValueError`. The function can raise another Python exception for a wrong object type or unsupported operation. In particular, `warp_image` is a low-level helper with fewer checks.
 
 The package does not provide a batch transform, an exact optical brightness model, or a CLI option for a custom Python function. It does not put gradients through integer conversion. Check the output when a high intensity can make text hard to read.
+
+## Image Transform
+
+`ImageTransform(operation="xor", mask=mask)(image)` applies a selected `and`, `or`, or `xor` operation to image pixels, not to the geometric displacement field. The class methods `logical_and(image, mask)`, `logical_or(image, mask)`, and `logical_xor(image, mask)` take a CHW image tensor first and a same-size H×W binary tensor or image-file path second. The mask is broadcast over image channels. All operations produce a new binary-valued float image. A gray mask or mismatched dimensions raise `ValueError`; these discrete operations do not preserve gradients. The CLI `--mask` still scales geometric displacement and does not select an image operation.
+
+### XOR
+
+XOR inverts black and white wherever the mask is white (1); it preserves the image wherever the mask is black (0). Float image values at least 0.5 count as white, including intermediate values from an earlier warp. For example:
+
+```python
+from PIL import Image
+import torch
+from src import ImageTransform, WarpTransform, image_to_tensor
+
+image = image_to_tensor(Image.open("original.png"))
+mask = torch.zeros(image.shape[1:], dtype=torch.bool)
+mask[:, image.shape[2] // 2:] = True
+inverted = ImageTransform.logical_xor(image, mask)
+warped = WarpTransform(mode="horizontal_wave", intensity=4)(image)
+inverted_warp = ImageTransform(operation="xor", mask=mask)(warped)
+```
+
+The illustrated [operator manual](lorem-warped-manual.pdf) uses saved checkerboard examples 02–07 with square sides of 82, 60, 44, 33, 24, and 18px for the original page's nominal 28px body font. Each example displays its actual binary mask beside the XOR result. The [full ten-size contact sheet](../examples/checkerboard-xor/contact_sheet.png) and the [sample manifest](../examples/checkerboard-xor/manifest.json) include the remaining four sizes.

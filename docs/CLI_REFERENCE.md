@@ -160,3 +160,11 @@ A uniform slab does not make a spatially varying warp at normal incidence. The m
 The CLI rejects unsupported combinations before it writes an output file. It also rejects invalid wavelength values, lens frequencies, lens counts, grid spacing, and several physical values. An absent input file or an output path error can produce a file-system exception.
 
 Use `--help` to see the option names in the installed version. Use the [Python API](API_REFERENCE.md) if you need a custom page function.
+
+## Image Transform
+
+Logical operations change image pixels, not displacement. They are available through `ImageTransform` in Python, not through the main `python -m src` CLI. The CLI's `--mask` option controls displacement and is not a logical-image option.
+
+### XOR
+
+Use `ImageTransform.logical_xor(image, mask)` with a CHW image tensor and a same-size binary H×W mask tensor or file. White mask pixels invert black and white in the image; black mask pixels do not. The [operator manual](lorem-warped-manual.pdf) illustrates saved checkerboard examples 02–07 (82, 60, 44, 33, 24, and 18px squares). See the [user guide](USER_GUIDE.md#xor) for a Python example.
